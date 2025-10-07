@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Home Network Mapper</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" />
+  <style>
+    html,body{height:100%;margin:0;font-family:Inter,sans-serif;background:#f4f7f8;color:#333}
+    .header{padding:16px;background:#ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:space-between}
+    .header h1{margin:0;font-size:18px;color:#222}
+    .container{display:grid;grid-template-columns:1fr 320px;gap:12px;height:calc(100vh - 72px)}
+    #network{border-radius:8px;background:#ffffff;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:8px; overflow:hidden;}
+    .sidebar{padding:12px;overflow:auto;background:#ffffff;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
+    .card{padding:12px;border-radius:10px;margin-bottom:12px;background:#f9fafb;box-shadow:0 1px 4px rgba(0,0,0,0.05)}
+    .legend .item{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+    .dot{width:18px;height:18px;border-radius:50%;display:inline-block}
+    .info{white-space:pre-wrap;font-size:13px}
+    button{background:#4caf50;color:white;padding:8px;border-radius:6px;border:0;cursor:pointer;margin-top:6px;width:100%}
+    input,select{width:100%;padding:6px;margin:4px 0;border-radius:6px;border:1px solid #ccc}
+    .welcome{padding:20px;text-align:center;color:#444}
+    small{color:#666}
+    @media(max-width:900px){.container{grid-template-columns:1fr}.sidebar{order:2}}
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Home Network Mapper</h1>
+    <button id="scanBtn">Scan!</button>
+  </div>
+
+  <div class="welcome" id="welcomeMsg">Welcome! Click <strong>Scan!</strong> to visualize your current home network.</div>
+
+  <div class="container" style="display:none;" id="mainContainer">
+    <div id="network"></div>
+
+    <aside class="sidebar">
+      <div class="card">
+        <strong>Selected Node</strong>
+        <div id="nodeInfo" class="info">Click a node to see details.</div>
+      </div>
+
+      <div class="card">
+        <strong>Add Node</strong>
+        <input type="text" id="addName" placeholder="Device Name">
+        <input type="text" id="addIP" placeholder="IP Address">
+        <select id="addType">
+          <option value="device">Device</option>
+          <option value="server">Server/NAS</option>
+          <option value="router">Router</option>
+        </select>
+        <button id="addNodeBtn">Add Node</button>
+      </div>
+
+      <div class="card">
+        <strong>Remove Node</strong>
+        <button id="removeNodeBtn">Remove Selected Node</button>
+      </div>
+
+      <div class="card">
+        <strong>Legend</strong>
+        <div class="legend">
+          <div class="item"><span class="dot" style="background:#4caf50;border:2px solid #7fe08a"></span> Router</div>
+          <div class="item"><span class="dot" style="background:#2196f3;border:2px solid #64b5f6"></span> Device</div>
+          <div class="item"><span class="dot" style="background:#ff9800;border:2px solid #ffb74d"></span> Server/NAS</div>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+  <script>
+    let network, nodes, edges;
+    let selectedNode = null;
+
+    document.getElementById('scanBtn').addEventListener('click', async ()=> {
+      document.getElementById('welcomeMsg').style.display='none';
+      document.getElementById('mainContainer').style.display='grid';
+
+      try {
+        const resp = await fetch('http://127.0.0.1:5000/network.json');
+        const networkData = await resp.json();
+
+        nodes = new vis.DataSet(networkData.nodes.map(n => ({
+          id: n.id,
+          label: n.label,
+          title: `<strong>${n.label}</strong><br>IP: ${n.ip || '-'}<br>MAC: ${n.mac || '-'}<br>Type: ${n.type || 'device'}`,
+          group: n.type || 'device',
+          shape: 'dot',
+          size: 38
+        })));
+
+        edges = new vis.DataSet(networkData.edges);
+
+        const container = document.getElementById('network');
+        network = new vis.Network(container, {nodes, edges}, {
+          interaction: {hover:true, navigationButtons:true, keyboard:true},
+          nodes: {borderWidth:2, font:{color:'#333'}},
+          groups: {
+            router:{color:{background:'#4caf50',border:'#7fe08a'}},
+            device:{color:{background:'#2196f3',border:'#64b5f6'}},
+            server:{color:{background:'#ff9800',border:'#ffb74d'}}
+          },
+          physics: {stabilization:true, barnesHut:{gravitationalConstant:-8000, springConstant:0.04, springLength:230}},
+          edges: {smooth:{type:'dynamic'}, color:{color:'#999'}}
+        });
+
+        // Node click
+        network.on('click', params => {
+          const sel = params.nodes[0];
+          selectedNode = sel || null;
+          const nodeInfo = document.getElementById('nodeInfo');
+          if(!sel){ nodeInfo.innerText='Click a node to see details.'; return;}
+          const n = nodes.get(sel);
+          const lines = n.title.split('<br>').map(l=>l.replace(/<strong>|<\/strong>/g,''));
+          nodeInfo.innerHTML = lines.join('\n');
+        });
+
+      } catch(e) {
+        alert('Python server not running or network.json not found. Run the Python scanner first.');
+      }
+    });
+
+    // Add node
+    document.getElementById('addNodeBtn').addEventListener('click', () => {
+      const name = document.getElementById('addName').value.trim();
+      const ip = document.getElementById('addIP').value.trim();
+      const type = document.getElementById('addType').value;
+      if(!name || !ip) return alert('Enter name and IP');
+      const newId = nodes.length+1;
+      nodes.add({id:newId, label:name, title:`<strong>${name}</strong><br>IP: ${ip}<br>Type: ${type}`, group:type, shape:'dot', size:38});
+    });
+
+    // Remove node
+    document.getElementById('removeNodeBtn').addEventListener('click', () => {
+      if(!selectedNode) return alert('Select a node first');
+      nodes.remove(selectedNode);
+      selectedNode=null;
+      document.getElementById('nodeInfo').innerText='Click a node to see details.';
+    });
+
+  </script>
+</body>
+</html>
